@@ -73,7 +73,7 @@ public class ReceptionBTinput  extends Thread {
         File file = new File(Environment.getExternalStoragePublicDirectory(
                 Environment.DIRECTORY_DOWNLOADS), FileName);
         if (!file.mkdirs()) {
-            Log.d("IONLESS", "Directory not created: "+FileName);
+            Log.w("IONLESS", "Directory not created: "+FileName);
         }
         return file;
     }
@@ -106,24 +106,8 @@ public class ReceptionBTinput  extends Thread {
         }
     }
 
-    public void run() {
-        int bytes; // bytes returned from read()
-        int bToSend;
-        boolean bconnected = false;
+    private boolean connect() {
         UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
-
-        Communication_machine mCommMachine = new Communication_machine();
-
-        /*
-        mmBluetooth.disable();
-        try {
-            this.sleep(100);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
-        mmBluetooth.enable();
-        */
-
         mmBluetooth.cancelDiscovery();
 
         resetConnection();
@@ -133,26 +117,25 @@ public class ReceptionBTinput  extends Thread {
         if (pairedDevices.size() > 0) {
             // Loop through paired devices
             for (BluetoothDevice device : pairedDevices) {
-
                 if ((device.getName() != null) && (device.getName().compareTo(mmEqName) == 0)) {
                     try {
                         mBTSocket = device.createInsecureRfcommSocketToServiceRecord(SPP_UUID);
                     } catch (IOException e) {
-                        Log.d("DOWNLOAD", "Create socket: " + e.getMessage());
-                        return;
+                        Log.d("IONLESS", "Create socket: " + e.getMessage());
+                        return false;
                     }
 
                     int retry_number = 10;
 
                     do {
                         retry_number--;
-                        bconnected = true;
                         try {
                             mBTSocket.connect();
-                            break;
+                            mBTInputStream = mBTSocket.getInputStream();
+                            mBTOutputStream = mBTSocket.getOutputStream();
+                            return true;
                         } catch (IOException connectException) {
-                            Log.d("DOWNLOAD", "Connect: RETRY " + connectException.getMessage());
-                            bconnected = false;
+                            Log.d("IONLESS", "Connect: RETRY " + connectException.getMessage());
                             try {
                                 this.sleep(100);
                             } catch (InterruptedException e) {
@@ -160,111 +143,199 @@ public class ReceptionBTinput  extends Thread {
                             }
 
                         }
-                    } while ((!bconnected) && (retry_number > 0));
+                    } while (retry_number > 0);
 
-                    if (!bconnected) {
-                        mmParent_handler.obtainMessage(2, mmEqName + " can't connect").sendToTarget();
-                        resetConnection();
-                        return;
-                    }
-                    else {
-                        try {
-                            mBTInputStream = mBTSocket.getInputStream();
-                            mBTOutputStream = mBTSocket.getOutputStream();
+                    mmParent_handler.obtainMessage(2, mmEqName + " can't connect").sendToTarget();
+                    resetConnection();
+                }
+            }
+        }
 
-                        } catch (IOException e) {
-                            mmParent_handler.obtainMessage(2, mmEqName + " can't connect - socket fail").sendToTarget();
-                            resetConnection();
-                            return;
-                        }
-                    }
+        return false;
+    }
+
+    private boolean ping(int iPingRetry) {
+        int bytes = 0;
+        boolean response=true;
+
+        try {
+            while((iPingRetry > 0)) { //(bytes != 'a') &&
+                iPingRetry--;
+                mBTOutputStream.write('a');
+                Log.d("IONLESS", "PING - "+iPingRetry);
+                waitbt(100);
+                if( mBTInputStream.available() != 0) {
+                    bytes = mBTInputStream.read();
+                    Log.d("IONLESS", "PING RESP: " + bytes);
+                    if (bytes != 'a') response = false;
+                    else response = true;
+                }
+                else {
+                    Log.d("IONLESS", "PING FAIL: " + bytes);
+                    waitbt(5000);
                 }
             }
 
+            mBTOutputStream.flush();
 
-            if (!bconnected) {
-                mmParent_handler.obtainMessage(2, mmEqName + " device not found!").sendToTarget();
+            waitbt(1000);
+
+            while( mBTInputStream.available() != 0 ){
+                bytes = mBTInputStream.read();
+                Log.d("IONLESS", "PING RESP RESIDUAL: "+bytes);
+            }
+
+        } catch (IOException e) {
+            e.printStackTrace();
+            mmParent_handler.obtainMessage(2, mmEqName + " error on first write(a)").sendToTarget();
+            return false;
+        }
+
+        return response;
+        /*
+        if(iPingRetry > 0)
+            return true;
+        else
+            return false;
+        */
+    }
+
+    private void waitbt(long timeout) {
+        try {
+            Thread.sleep(timeout);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private boolean readFile(int iFilesToRead) {
+        int bytes; // bytes returned from read()
+        int bToSend;
+        int iCompleted = 15;
+
+        Communication_machine mCommMachine = new Communication_machine();
+
+        mmParent_handler.obtainMessage(3, "Recebendo o arquivo: "+iFilesToRead+" - "+iCompleted+"%").sendToTarget();
+
+        while (true) {
+            try {
+                /*
+                // Read from the InputStream
+                iWakeupRetry = 20;
+                while( mBTInputStream.available() == 0 ) {
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                    if(iWakeupRetry-- < 0) {
+                        mmParent_handler.obtainMessage(2, mmEqName + " Error: device is not replying").sendToTarget();
+                        Log.d("IONLESS", "Device don't answer");
+                        resetConnection();
+                        return;
+                    }
+                }
+                */
+                if( mBTInputStream == null) {
+                    Log.d("IONLESS", "mBTInputStream == null");
+                    mmParent_handler.obtainMessage(3," communication exception!").sendToTarget();
+                    return false;
+                }
+
+                Log.d("IONLESS", "READ FROM IS");
+                bytes = mBTInputStream.read(); //read(buffer,0,1);
+                Log.d("IONLESS", "READ FROM IS: "+bytes);
+                if (bytes <= 0)
+                    Log.d("IONLESS", "ZERO BYTE READ: " + bytes);
+
+                if (bytes == 24) //0x18 - CAN - Cancel (force receiver to start sending)
+                    Log.d("IONLESS", "RECEIVE CAN: " + bytes);
+
+                bToSend = mCommMachine.communication_task(bytes);
+                Log.d("IONLESS", "COM MACHINE TOSEND: "+bToSend);
+
+                mmParent_handler.obtainMessage(3, "Recebendo o arquivo: "+iFilesToRead+" - "+(iCompleted++)+"%").sendToTarget();
+
+                switch (bToSend) {
+                    case 0x04: //EOT
+                        int res = SaveFile(mCommMachine.comm_save_file());
+                        // Send the obtained bytes to the UI activity
+                        // mmParent_handler.obtainMessage(res, mmEqName + " OK - file saved").sendToTarget();
+                        //resetConnection();
+                        Log.d("IONLESS", "EOT: "+bytes);
+                        return true;
+                    case 0x15: //NACK
+                        // Send the obtained bytes to the UI activity
+                        mmParent_handler.obtainMessage(3," communication NACK: " + bToSend).sendToTarget();
+                        //resetConnection();
+                        //break;
+                        Log.d("IONLESS", "NACK: "+bytes);
+                        return false;
+                    default:
+                        if (bToSend > 0) mBTOutputStream.write(bToSend);
+                        break;
+                }
+
+            } catch (IOException e) {
+                mmParent_handler.obtainMessage(2, mmEqName + " exception: " + e.getMessage()).sendToTarget();
+                Log.d("IONLESS", e.getMessage());
+                //resetConnection();
+                return false;
+            }
+        }
+    }
+
+    public void run() {
+        mmParent_handler.obtainMessage(3, mmEqName + " Enabling bluetooth!").sendToTarget();
+        mmBluetooth.cancelDiscovery();
+        /*
+        mmBluetooth.disable();
+        waitbt(1000);
+        mmBluetooth.enable();
+        waitbt(5000);
+        */
+        mmParent_handler.obtainMessage(3, mmEqName + " Bluetooth ready!").sendToTarget();
+
+        if (!connect()) {
+            mmParent_handler.obtainMessage(2, mmEqName + " device not found!").sendToTarget();
+            resetConnection();
+            return;
+        }
+
+        Log.d("IONLESS", "Connected!");
+
+        int iFilesToRead = 10;
+        do {
+            mmParent_handler.obtainMessage(3, "Recebendo o arquivo: "+iFilesToRead+" - 0%").sendToTarget();
+
+            waitbt(1000);
+
+            if (!ping(5)) {
+                mmParent_handler.obtainMessage(2, mmEqName + " device is not responding!").sendToTarget();
                 resetConnection();
                 return;
             }
 
-            Log.d("DOWNLOAD", "Connected!");
-            mmParent_handler.obtainMessage(3, "Conectado, aguarde o recebimento do arquivo ...").sendToTarget();
+            mmParent_handler.obtainMessage(3, "Recebendo o arquivo: "+iFilesToRead+" - 2%").sendToTarget();
 
+            waitbt(1000);
 
             try {
                 mBTOutputStream.write('f'); //'f'  0x15 //O correto seria escrever NACK para inicio - revisar no firmware
+                Log.d("IONLESS", "WRITE F: ");
             } catch (IOException e) {
                 e.printStackTrace();
                 mmParent_handler.obtainMessage(2, mmEqName + " error on first write(f)").sendToTarget();
                 return;
             }
-            // Keep listening to the InputStream until an exception occurs
-            int iWakeupRetry = 4;
-            while (true) {
-                try {
-                    /*
-                    // Read from the InputStream
-                    iWakeupRetry = 20;
-                    while( mBTInputStream.available() == 0 ) {
-                        try {
-                            Thread.sleep(500);
-                        } catch (InterruptedException e) {
-                            e.printStackTrace();
-                        }
-                        if(iWakeupRetry-- < 0) {
-                            mmParent_handler.obtainMessage(2, mmEqName + " Error: device is not replying").sendToTarget();
-                            Log.d("BTRECEPTION", "Device don't answer");
-                            resetConnection();
-                            return;
-                        }
-                    }
-                    */
-                    if( mBTInputStream == null) {
-                        Log.d("BTRECEPTION", "mBTInputStream == null");
-                        mmParent_handler.obtainMessage(3," communication exception!").sendToTarget();
-                        return;
-                    }
+            mmParent_handler.obtainMessage(3, "Recebendo o arquivo: "+iFilesToRead+" - 10%").sendToTarget();
 
-                    bytes = mBTInputStream.read(); //read(buffer,0,1);
-                    if (bytes <= 0)
-                        Log.d("BTRECEPTION", "ZERO BYTE READ: " + bytes);
-
-                    if (bytes == 24) //0x18 - CAN - Cancel (force receiver to start sending)
-                        Log.d("BTRECEPTION", "RECEIVE CAN: " + bytes);
+        }while(readFile(iFilesToRead) && (iFilesToRead-- > 0));
+        // Keep listening to the InputStream until an exception occurs
 
 
-                    bToSend = mCommMachine.communication_task(bytes);
-
-                    switch (bToSend) {
-                        case 0x04: //EOT
-                            int res = SaveFile(mCommMachine.comm_save_file());
-                            // Send the obtained bytes to the UI activity
-                            mmParent_handler.obtainMessage(res, mmEqName + " OK - file saved").sendToTarget();
-                            resetConnection();
-                            break;
-                        case 0x15: //NACK
-                            // Send the obtained bytes to the UI activity
-                            mmParent_handler.obtainMessage(3," communication NACK: " + bToSend).sendToTarget();
-                            //resetConnection();
-                            //break;
-                        default:
-                            if (bToSend > 0) mBTOutputStream.write(bToSend);
-                            break;
-                    }
-
-                } catch (IOException e) {
-                    mmParent_handler.obtainMessage(2, mmEqName + " exception: " + e.getMessage()).sendToTarget();
-                    Log.d("BTRECEPTION", e.getMessage());
-                    resetConnection();
-                    break;
-                }
-            }
-            mmParent_handler.obtainMessage(1, mmEqName + " Exit thread").sendToTarget();
-            resetConnection();
-        }
-        else {
-            mmParent_handler.obtainMessage(2, mmEqName + " no paired devices found").sendToTarget();
-        }
+        Log.d("IONLESS", "Exit thread!");
+        mmParent_handler.obtainMessage(1, mmEqName + " Exit thread").sendToTarget();
+        resetConnection();
     } // run()
 }

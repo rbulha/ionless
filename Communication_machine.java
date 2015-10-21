@@ -153,6 +153,9 @@ public class Communication_machine {
                         this.mm_machine.estate           = ESTATE.E_COMM_SET_FILE;
                         this.mm_machine.SBUF1 = 0x43;
                         break;
+                    default:
+                        this.mm_machine.SBUF1 = 'f'; //try again
+                        break;
                 }
                 break;
             case A_COMM_CHECK_PACKET_HEADER_SOH:
